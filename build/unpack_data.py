@@ -3,10 +3,18 @@ import pandas as pd
 
 
 def unpack_data(input_dir, output_file):
+    print(os.listdir(input_dir))
+    dfs=[]
+    for folder in os.listdir(input_dir):
+        folder_path=os.path.join(input_dir,folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                if file.endswith('.csv') or "data-" in file: 
+                    dfs.append(pd.read_csv(os.path.join(input_dir,folder,file)))
+    
+    pd.concat(dfs,ignore_index=True).to_csv(output_file,index=False)
     """
-    Exercice : Fonction pour décompresser et combiner plusieurs fichiers CSV à partir d'un répertoire en un seul fichier CSV.
-
-    Objectifs :
+    sectifs :
     1. Lire tous les fichiers CSV dans un répertoire donné.
     2. Combiner les fichiers dans un seul DataFrame.
     3. Sauvegarder le DataFrame combiné dans un fichier CSV final.
@@ -29,9 +37,6 @@ def unpack_data(input_dir, output_file):
     - Combinez les DataFrames avec `pd.concat`.
     - Sauvegardez le résultat avec `to_csv`.
     """
-
-    pass
-
 
 
 if __name__ == "__main__":
