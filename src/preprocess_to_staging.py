@@ -7,9 +7,47 @@ import numpy as np
 import tqdm
 import joblib
 from collections import OrderedDict
+import boto3
+import io
+import os
+from io import StringIO
+import json
+from numba import njit
+@njit
+def split_indices(family_accession_encoded,unique_classes):
+    print("Splitting data into train, dev, and test sets...")
+    train_indices, dev_indices, test_indices = [], [], []
 
+    for cls in unique_classes:
+        class_data_indices = np.where(family_accession_encoded == cls)[0]
+        count = len(class_data_indices)
 
-def preprocess_data(data_file, output_dir):
+        if count == 1:
+            test_indices.extend(class_data_indices)
+        elif count == 2:
+            dev_indices.extend(class_data_indices[:1])
+            test_indices.extend(class_data_indices[1:])
+        elif count == 3:
+            train_indices.extend(class_data_indices[:1])
+            dev_indices.extend(class_data_indices[1:2])
+            test_indices.extend(class_data_indices[2:])
+        else:
+            np.random.seed(42)  # Fix random state
+            np.random.shuffle(class_data_indices)
+            train_split = int(len(class_data_indices) * (1 / 3))
+            dev_split = train_split + int(len(class_data_indices) * (1 / 3))
+            train_indices.extend(class_data_indices[:train_split])
+            dev_indices.extend(class_data_indices[train_split:dev_split])
+            test_indices.extend(class_data_indices[dev_split:])
+            
+    # Convert indices lists to numpy arrays
+    train_indices = np.array(train_indices)
+    dev_indices = np.array(dev_indices)
+    test_indices = np.array(test_indices)
+
+    return train_indices, dev_indices, test_indices
+    
+def preprocess_data(client,bucket_raw,input_file,bucket_staging,output_prefix):
     """
     Preprocesses the raw data for model training and evaluation.
 
@@ -33,7 +71,8 @@ def preprocess_data(data_file, output_dir):
     """
     # Load the data
     print('Loading Data...')
-    data = pd.read_csv(data_file)
+    response = client.get_object(Bucket=bucket_raw, Key=input_file)
+    data = pd.read_csv(io.BytesIO(response['Body'].read())) # Use this to read the data from the remote bucket.
 
     # Handle missing values
     data = data.dropna()
@@ -43,56 +82,49 @@ def preprocess_data(data_file, output_dir):
     data['class_encoded'] = label_encoder.fit_transform(data['family_accession'])
 
     # Save label encoder mapping
-    joblib.dump(label_encoder, f"{output_dir}/label_encoder.joblib")
+    joblib.dump(label_encoder, f"./label_encoder.joblib")
 
     # Prepare label mapping
-    label_mapping = dict(zip(label_encoder.classes_, label_encoder.transform(label_encoder.classes_)))
-    with open(f"{output_dir}/label_mapping.txt", 'w') as f:
-        for key, value in label_mapping.items():
-            f.write(f"{key}: {value}\n")
+    label_mapping = dict(zip(label_encoder.classes_, map(int, label_encoder.transform(label_encoder.classes_))))
+    json_data = json.dumps(label_mapping)
+
+    s3.put_object(
+            Bucket=bucket_staging,
+            Key=f"{output_prefix}_label_mapping.txt", 
+            Body=json_data  
+    )
+
+    unique_classes, class_counts = np.unique(data["class_encoded"], return_counts=True)
 
     # Manual train/dev/test split logic
-    print("Splitting data into train, dev, and test sets...")
-    family_accession = data['family_accession'].values
-    class_encoded = data['class_encoded'].values
+    train_indices, dev_indices, test_indices = split_indices(data['class_encoded'].to_numpy(),unique_classes)
 
-    unique_classes, class_counts = np.unique(family_accession, return_counts=True)
-
-    train_indices, dev_indices, test_indices = [], [], []
-
-    for cls in tqdm.tqdm(unique_classes):
-        class_data_indices = np.where(family_accession == cls)[0]
-        count = len(class_data_indices)
-
-        if count == 1:
-            test_indices.extend(class_data_indices)
-        elif count == 2:
-            dev_indices.extend(class_data_indices[:1])
-            test_indices.extend(class_data_indices[1:])
-        elif count == 3:
-            train_indices.extend(class_data_indices[:1])
-            dev_indices.extend(class_data_indices[1:2])
-            test_indices.extend(class_data_indices[2:])
-        else:
-            train_part, remaining = train_test_split(class_data_indices, test_size=2 / 3, random_state=42)
-            dev_part, test_part = train_test_split(remaining, test_size=0.5, random_state=42)
-            train_indices.extend(train_part)
-            dev_indices.extend(dev_part)
-            test_indices.extend(test_part)
-
-    # Convert indices lists to numpy arrays
-    train_indices = np.array(train_indices)
-    dev_indices = np.array(dev_indices)
-    test_indices = np.array(test_indices)
-
-    # Create and save train, dev, and test DataFrames
+    # Use indices to create subsets of the original DataFrame
     train_data = data.iloc[train_indices]
     dev_data = data.iloc[dev_indices]
     test_data = data.iloc[test_indices]
-
-    train_data.to_csv(f"{output_dir}/train.csv", index=False)
-    dev_data.to_csv(f"{output_dir}/dev.csv", index=False)
-    test_data.to_csv(f"{output_dir}/test.csv", index=False)
+    
+    
+    train_buf,dev_buf,test_buf = StringIO(),StringIO(),StringIO()
+    train_data.to_csv(train_buf, index=False)
+    dev_data.to_csv(dev_buf, index=False)
+    test_data.to_csv(test_buf, index=False)
+    
+    train_buf.seek(0)
+    dev_buf.seek(0)
+    test_buf.seek(0)
+    try:
+        client.put_object(Bucket=bucket_staging, Body=train_buf.getvalue(), Key=f'{output_prefix}_train.csv')
+        client.put_object(Bucket=bucket_staging, Body=dev_buf.getvalue(), Key=f'{output_prefix}_dev.csv')
+        client.put_object(Bucket=bucket_staging, Body=test_buf.getvalue(), Key=f'{output_prefix}_test.csv')
+        print("Files successfully uploaded to S3.")
+    except Exception as e:
+        print(f"Error uploading files: {e}")
+    finally:
+        # Fermer les buffers pour libérer la mémoire
+        train_buf.close()
+        dev_buf.close()
+        test_buf.close()
 
     # Compute class weights and save them
     class_counts = train_data['class_encoded'].value_counts()
@@ -100,20 +132,39 @@ def preprocess_data(data_file, output_dir):
     class_weights /= class_weights.sum()
 
     full_class_weights = {i: class_weights.get(i, 0.0) for i in range(max(class_counts.index) + 1)}
-    with open(f"{output_dir}/class_weights.txt", 'w') as f:
-        for key, value in full_class_weights.items():
-            f.write(f"{key}: {value}\n")
 
+    
+    json_data = json.dumps(full_class_weights)
+
+    s3.put_object(
+            Bucket=bucket_staging,
+            Key=f"{output_prefix}_class_weights.txt", 
+            Body=json_data  
+    )
+
+
+
+
+def init_client():
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.getenv("AWS_ENDPOINT_URL", "http://localhost:4566"),
+        aws_access_key_id=os.getenv("AWS_API_KEY"),  # Default for LocalStack
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),  # Default for LocalStack
+    )
+    return s3
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Preprocess protein data")
-    parser.add_argument("--data_file", type=str, required=True, help="Path to raw CSV file")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save preprocessed data")
+    parser.add_argument("--bucket_raw", type=str, required=True, help="Path to raw CSV file")
+    parser.add_argument("--input_file", type=str, required=True, help="Path to raw CSV file")
+    parser.add_argument("--bucket_staging", type=str, required=True, help="Path to raw CSV file")
+    parser.add_argument("--output_prefix", type=str, required=True, help="Directory to save preprocessed data")
     args = parser.parse_args()
-
-    preprocess_data(args.data_file, args.output_dir)
+    s3=init_client()
+    preprocess_data(s3,args.bucket_raw,args.input_file,args.bucket_staging,args.output_prefix)
 
 #######################################################
 # Task: Modify this code to achieve the following:
