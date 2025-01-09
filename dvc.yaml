@@ -1,0 +1,13 @@
+stages:
+  unpack_raw:
+    cmd: python src/unpack_to_raw.py --bucket raw --dataset_dir data/raw
+    deps:
+    - .env
+    - data/raw
+    - src/unpack_to_raw.py
+    outs:
+    - data/raw
+    - s3://raw
+
+
+
