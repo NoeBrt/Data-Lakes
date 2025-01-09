@@ -3,11 +3,16 @@ stages:
     cmd: python src/unpack_to_raw.py --bucket raw --dataset_dir data/raw
     deps:
     - .env
-    - data/raw
     - src/unpack_to_raw.py
     outs:
-    - data/raw
-    - s3://raw
-
-
-
+    - data/raw/
+  process_staging:
+    cmd: python src/process_to_staging.py --bucket_raw raw --input_file train.csv  
+    deps:
+    - .env
+    - src/process_to_staging.py
+  process_curated:
+    cmd: python src/process_to_curated.py --mysql_name staging --mongo_db_name curated --mongo_collection wikitext --model_name distilbert-base-uncased
+    deps:
+    - .env
+    - src/process_to_curated.py
