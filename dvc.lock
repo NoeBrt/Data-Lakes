@@ -1,0 +1,42 @@
+schema: '2.0'
+stages:
+  unpack_raw:
+    cmd: python src/unpack_to_raw.py --bucket raw --dataset_dir data/raw
+    deps:
+    - path: .env
+      hash: md5
+      md5: 9c3d323112a885f61a98b511007d467b
+      size: 162
+    - path: src/unpack_to_raw.py
+      hash: md5
+      md5: b9ce6df1c52997132995b7236324eb48
+      size: 2490
+    outs:
+    - path: data/raw/
+      hash: md5
+      md5: cb2575a20c317c2923157b2e369f761e.dir
+      size: 27050436
+      nfiles: 10
+  process_staging:
+    cmd: python src/process_to_staging.py --bucket_raw raw --input_file train.csv
+    deps:
+    - path: .env
+      hash: md5
+      md5: 9c3d323112a885f61a98b511007d467b
+      size: 162
+    - path: src/process_to_staging.py
+      hash: md5
+      md5: 67a3dbf6d3758449fbbb815e2e0bf77a
+      size: 3326
+  process_curated:
+    cmd: python src/process_to_curated.py --mysql_name staging --mongo_db_name curated
+      --mongo_collection wikitext --model_name distilbert-base-uncased
+    deps:
+    - path: .env
+      hash: md5
+      md5: 9c3d323112a885f61a98b511007d467b
+      size: 162
+    - path: src/process_to_curated.py
+      hash: md5
+      md5: 723e1b0673792a86a4333e881de13002
+      size: 2959

@@ -1,3 +1,6 @@
+vars:
+  - params.yaml
+
 stages:
   unpack_raw:
     cmd: python src/unpack_to_raw.py --bucket raw --dataset_dir data/raw
@@ -11,8 +14,16 @@ stages:
     deps:
     - .env
     - src/process_to_staging.py
+    - params.yaml
+    outs:
+      - ${staging_data}:
+          cache: false
   process_curated:
     cmd: python src/process_to_curated.py --mysql_name staging --mongo_db_name curated --mongo_collection wikitext --model_name distilbert-base-uncased
     deps:
     - .env
     - src/process_to_curated.py
+    - params.yaml
+    outs:
+      - ${curated_data}:
+          cache: false
